@@ -1,0 +1,18 @@
+{
+  "name": "orders-service",
+  "version": "1.0.0",
+  "description": "PerfumesDuoc - Microservicio de Órdenes. Registra la compra formal y publica eventos para descuento de stock y notificación por correo.",
+  "main": "src/app.js",
+  "scripts": { "start": "node src/app.js", "dev": "nodemon src/app.js" },
+  "dependencies": {
+    "amqplib": "^0.10.4",
+    "axios": "^1.7.7",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "jwks-rsa": "^3.1.0",
+    "pg": "^8.12.0"
+  },
+  "devDependencies": { "nodemon": "^3.1.0" }
+}

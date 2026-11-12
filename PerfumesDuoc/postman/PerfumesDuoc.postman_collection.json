@@ -1,0 +1,78 @@
+{
+  "info": {
+    "name": "PerfumesDuoc",
+    "description": "Colección para probar el API Gateway, RabbitMQ (vía flujo de compra) y el microservicio de notificaciones directamente, según los entregables del Enunciado_2.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "gateway", "value": "http://localhost:8080" },
+    { "key": "notifications", "value": "http://localhost:4004" },
+    { "key": "token", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1. Login local (obtener JWT de prueba)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{gateway}}/dev/login-local",
+        "body": { "mode": "raw", "raw": "{\"email\": \"cliente@duoc.cl\"}" }
+      }
+    },
+    {
+      "name": "2. Catálogo (público, sin token)",
+      "request": { "method": "GET", "url": "{{gateway}}/api/productos" }
+    },
+    {
+      "name": "3. Carrito SIN token -> debe dar 401",
+      "request": { "method": "GET", "url": "{{gateway}}/api/carrito" }
+    },
+    {
+      "name": "4. Carrito CON token -> 200",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{gateway}}/api/carrito"
+      }
+    },
+    {
+      "name": "5. Agregar item al carrito",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": "{{gateway}}/api/carrito/items",
+        "body": { "mode": "raw", "raw": "{\"productoId\": 1, \"cantidad\": 2}" }
+      }
+    },
+    {
+      "name": "6. Confirmar orden (dispara RabbitMQ: stock + correo + cupón)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": "{{gateway}}/api/ordenes",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"items\": [{\"productoId\": 1, \"cantidad\": 2, \"precio\": 89990, \"nombre\": \"Bleu de Chanel\"}], \"cuponCodigo\": \"BIENVENIDO10\"}"
+        }
+      }
+    },
+    {
+      "name": "7. Notificación directa desde Postman",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{notifications}}/notificaciones/correo",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"to\": \"cliente@duoc.cl\", \"subject\": \"Prueba PerfumesDuoc\", \"text\": \"Notificación de prueba enviada desde Postman.\"}"
+        }
+      }
+    }
+  ]
+}

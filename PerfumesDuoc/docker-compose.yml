@@ -1,0 +1,167 @@
+# ============================================================================
+# PerfumesDuoc - Arquitectura de Microservicios (simulación local)
+# ----------------------------------------------------------------------------
+# Este docker-compose levanta TODO el ecosistema en tu máquina para que puedas
+# desarrollar y grabar evidencias sin depender de cuentas reales de Azure/AWS:
+#   - RabbitMQ (mensajería asíncrona entre microservicios)
+#   - PostgreSQL (una BD por servicio, esquema propio)
+#   - api-gateway  -> simula el AWS API Gateway + JWT Authorizer
+#   - products-service, cart-service, orders-service,
+#     notifications-service, coupons-service (microservicio a elección)
+#   - frontend (React + Vite)
+#
+# Para producción real, ver README.md sección "Despliegue real en AWS/Azure":
+# ahí se explica cómo reemplazar api-gateway por AWS API Gateway real
+# (gateway/aws/serverless.yml) y el login mock por Azure AD real (MSAL).
+# ============================================================================
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: perfumesduoc-rabbitmq
+    ports:
+      - "5672:5672"   # AMQP
+      - "15672:15672" # Panel de administración http://localhost:15672 (guest/guest)
+    healthcheck:
+      test: ["CMD", "rabbitmqctl", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: perfumesduoc-postgres
+    environment:
+      POSTGRES_USER: perfumesduoc
+      POSTGRES_PASSWORD: perfumesduoc
+      POSTGRES_DB: perfumesduoc
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./services/products-service/sql/init.sql:/docker-entrypoint-initdb.d/01-products.sql
+      - ./services/orders-service/sql/init.sql:/docker-entrypoint-initdb.d/02-orders.sql
+      - ./services/coupons-service/sql/init.sql:/docker-entrypoint-initdb.d/03-coupons.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U perfumesduoc -d perfumesduoc"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  api-gateway:
+    build: ./gateway
+    container_name: perfumesduoc-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - JWT_MODE=${JWT_MODE:-local}          # local | azure
+      - LOCAL_JWT_SECRET=${LOCAL_JWT_SECRET:-perfumesduoc_dev_secret}
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID:-}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID:-}
+      - PRODUCTS_URL=http://products-service:4001
+      - CART_URL=http://cart-service:4002
+      - ORDERS_URL=http://orders-service:4003
+      - NOTIFICATIONS_URL=http://notifications-service:4004
+      - COUPONS_URL=http://coupons-service:4005
+    depends_on:
+      products-service: { condition: service_started }
+      cart-service: { condition: service_started }
+      orders-service: { condition: service_started }
+      notifications-service: { condition: service_started }
+
+  products-service:
+    build: ./services/products-service
+    container_name: perfumesduoc-products
+    ports: ["4001:4001"]
+    environment:
+      - PORT=4001
+      - DATABASE_URL=postgres://perfumesduoc:perfumesduoc@postgres:5432/perfumesduoc
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+      - JWT_MODE=${JWT_MODE:-local}
+      - LOCAL_JWT_SECRET=${LOCAL_JWT_SECRET:-perfumesduoc_dev_secret}
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID:-}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID:-}
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+
+  cart-service:
+    build: ./services/cart-service
+    container_name: perfumesduoc-cart
+    ports: ["4002:4002"]
+    environment:
+      - PORT=4002
+      - PRODUCTS_URL=http://products-service:4001
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+      - JWT_MODE=${JWT_MODE:-local}
+      - LOCAL_JWT_SECRET=${LOCAL_JWT_SECRET:-perfumesduoc_dev_secret}
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID:-}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID:-}
+    depends_on:
+      products-service: { condition: service_started }
+      rabbitmq: { condition: service_healthy }
+
+  orders-service:
+    build: ./services/orders-service
+    container_name: perfumesduoc-orders
+    ports: ["4003:4003"]
+    environment:
+      - PORT=4003
+      - DATABASE_URL=postgres://perfumesduoc:perfumesduoc@postgres:5432/perfumesduoc
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+      - COUPONS_URL=http://coupons-service:4005
+      - JWT_MODE=${JWT_MODE:-local}
+      - LOCAL_JWT_SECRET=${LOCAL_JWT_SECRET:-perfumesduoc_dev_secret}
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID:-}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID:-}
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      # Sin dependencia de coupons-service: los cupones son opcionales y
+      # la compra debe funcionar aunque ese microservicio esté apagado.
+
+  notifications-service:
+    build: ./services/notifications-service
+    container_name: perfumesduoc-notifications
+    ports: ["4004:4004"]
+    environment:
+      - PORT=4004
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - SMTP_FROM=${SMTP_FROM:-notificaciones@perfumesduoc.cl}
+      - EMAIL_SIMULATION=${EMAIL_SIMULATION:-true}
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+
+  coupons-service:
+    build: ./services/coupons-service
+    container_name: perfumesduoc-coupons
+    ports: ["4005:4005"]
+    environment:
+      - PORT=4005
+      - DATABASE_URL=postgres://perfumesduoc:perfumesduoc@postgres:5432/perfumesduoc
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+      - JWT_MODE=${JWT_MODE:-local}
+      - LOCAL_JWT_SECRET=${LOCAL_JWT_SECRET:-perfumesduoc_dev_secret}
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID:-}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID:-}
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+
+  frontend:
+    build: ./frontend
+    container_name: perfumesduoc-frontend
+    ports: ["5173:80"]
+    environment:
+      - VITE_API_GATEWAY_URL=http://localhost:8080
+    depends_on: [api-gateway]
+
+volumes:
+  pg_data:
