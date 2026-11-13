@@ -1,4 +1,4 @@
-# EV2_CloudNative_Perfume
+# EVS_CloudNative_Perfume
 
 ## 👥 Integrantes
 
