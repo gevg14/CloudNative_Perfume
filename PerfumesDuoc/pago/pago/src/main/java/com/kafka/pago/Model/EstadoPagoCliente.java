@@ -7,9 +7,7 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Id;
 
 @Entity
-
 @Table(name = "estado_pago_cliente")
-
 @Data
 
 public class EstadoPagoCliente{
