@@ -1,135 +1,180 @@
-# PerfumesDuoc — Arquitectura de Microservicios
+# PerfumesDuoc — Evaluación 3
 
-Proyecto de tienda online de perfumes construido siguiendo el encargo
-**"Pedidos360 – Arquitectura de Microservicios"** (`Enunciado_2.docx`), adaptado
-al rubro de perfumería. Usa como base de estilo/convenciones el proyecto de
-referencia entregado (`CodigoFuenteB.zip`), pero con una arquitectura de
-microservicios independiente en vez de un monolito.
-
-## 1. Arquitectura
+Tienda de perfumes con arquitectura de microservicios.
 
 ```
-                         ┌─────────────────────┐
-                         │  Azure AD / Entra ID │  (OAuth2 / OIDC + PKCE)
-                         │   IDaaS - Login      │
-                         └──────────┬───────────┘
-                                    │ JWT
-                         ┌──────────▼───────────┐
-   Frontend (React) ────▶│   AWS API Gateway     │  Single Entrypoint
-                         │  + JWT Authorizer     │  (401 / 403)
-                         └──────────┬───────────┘
-              ┌─────────────┬───────┼───────────┬─────────────┐
-              ▼             ▼       ▼           ▼             ▼
-        products-svc   cart-svc  orders-svc  notifications  coupons-svc
-                                                svc          (a elección)
-              │             │       │           ▲             ▲
-              └──────HTTP───┘       │           │             │
-                                    └──RabbitMQ──┴─────────────┘
+Navegador (React)
+      │  HTTPS + JWT de Microsoft Entra ID
+      ▼
+API Gateway  ── CORS + rutas /api/*      (local: Kong · nube: AWS API Gateway + JWT Authorizer)
+      │
+      ├─ products-service        :4001  Node + Postgres
+      ├─ cart-service            :4002  Node
+      ├─ orders-service          :4003  Node + Postgres
+      ├─ notifications-service   :4004  Node
+      ├─ coupons-service         :4005  Node + Postgres
+      ├─ profile-service         :4006  Node + Postgres   (perfil de usuario)
+      ├─ recommendations-service :4007  Node + Postgres   (recomendaciones)
+      └─ mspago                  :8083  Spring Boot + Kafka + Webpay Plus (pagos y fraude)
+
+RabbitMQ (colas de la Evaluación 2)      Kafka (4 tópicos, Evaluación 3)
 ```
 
-- **Frontend**: React + Vite + Tailwind. Login corporativo con Azure AD
-  mediante MSAL (`@azure/msal-react`), interceptor Axios que adjunta el JWT a
-  cada request.
-- **AWS API Gateway (`gateway/`)**: punto de entrada único. En local se simula
-  con Express + JWT Authorizer; para producción real, `gateway/aws/` trae
-  `serverless.yml` + Lambda Authorizer para desplegar en AWS de verdad.
-- **RabbitMQ**: exchange `perfumesduoc.events` (topic). Eventos usados:
-  - `orden.creada` → `orders-service` lo publica, `products-service` lo
-    consume para descontar stock.
-  - `orden.confirmada` → `orders-service` lo publica, `notifications-service`
-    lo consume para enviar el correo de confirmación.
-  - `cupon.usado` → `orders-service` lo publica, `coupons-service` lo
-    consume para registrar el uso/auditoría del cupón.
-- **Microservicio nuevo a elección**: **Cupones de descuento**
-  (`coupons-service`), valida cupones síncronamente al pagar y audita su uso
-  de forma asíncrona por RabbitMQ.
+## 1. Qué se corrigió y agregó en la Evaluación 3
 
-## 2. Cómo levantar todo en local (modo simulado, sin cuentas cloud)
+| Punto del profesor | Dónde está |
+|---|---|
+| Tenant de Microsoft Azure | Sección 3 (pasos) · `JWT_MODE=azure` |
+| API Gateway para el frontend | `gateway/kong/kong.yml` (local) y `gateway/aws/api-gateway.yml` (AWS) |
+| CORS en el API Gateway | Plugin `cors` de Kong / `CorsConfiguration` de AWS. Los microservicios ya no tienen CORS |
+| No usar proxy en backend | Se eliminó el gateway Express con `http-proxy-middleware` y las Lambdas proxy |
+| Microservicio perfil de usuario | `services/profile-service` + página **Mi perfil** |
+| Kafka, mínimo 2 tópicos | 4 tópicos, ver sección 5 |
+| mspago con detección de fraude + botón de pago | `services/mspago` + páginas **Pago** y **Callback** |
+| Microservicio de recomendaciones | `services/recommendations-service` + bloque "Recomendados para ti" |
+| Pago seguro y registrado | Webpay Plus (integración), tabla `pagos`, sección 6 |
+
+## 2. Levantar el proyecto en tu máquina
+
+Requisito: Docker Desktop.
 
 ```bash
-cp .env.example .env
-docker compose up --build
+cd PerfumesDuoc
+cp .env.example .env        # opcional: sin .env se usa el login local simulado
+docker compose up -d --build
 ```
 
-- Frontend: http://localhost:5173
-- API Gateway: http://localhost:8080
-- RabbitMQ panel: http://localhost:15672 (guest/guest)
+La primera vez tarda varios minutos (mspago descarga las dependencias de Maven).
 
-Por defecto `JWT_MODE=local` y `VITE_AUTH_MODE=local`: el login usa un
-endpoint de desarrollo (`POST /dev/login-local`) que firma un JWT igual en
-forma al que emitiría Azure AD, para poder probar **todo el flujo end-to-end**
-sin depender de un tenant real. Cuando tengas tu tenant, basta con cambiar las
-variables de entorno (ver sección 3) — el código de negocio no cambia.
+| Qué | URL |
+|---|---|
+| Frontend | http://localhost:5173 |
+| API Gateway | http://localhost:8080 |
+| Kafka UI (tópicos y mensajes) | http://localhost:8085 |
+| RabbitMQ | http://localhost:15672 (guest / guest) |
 
-## 3. Cómo conectar Azure AD real (login corporativo)
+## 3. Microsoft Entra ID (Azure AD): crear el tenant y conectar el login
 
-1. Portal de Azure → **Microsoft Entra ID** → **Registros de aplicaciones** →
-   Nuevo registro (tipo SPA), redirect URI `http://localhost:5173`.
-2. Copia el **Application (client) ID** y el **Directory (tenant) ID**.
-3. Expón un scope de API (`api://<client-id>/access_as_user`) si vas a
-   proteger tus propios endpoints con un access token de esa API.
-4. En `frontend/.env`:
+**A. Crear el tenant**
+1. [portal.azure.com](https://portal.azure.com) → **Microsoft Entra ID** → **Administrar inquilinos** → **Crear**.
+2. Tipo **Microsoft Entra ID** → organización `PerfumesDuoc`, dominio inicial (ej. `perfumesduoc2026.onmicrosoft.com`), país Chile → **Revisar y crear**.
+3. Engranaje → **Directorios + suscripciones** → **Cambiar** al tenant nuevo.
+
+**B. Registrar la aplicación**
+4. **Registros de aplicaciones** → **Nuevo registro**: nombre `perfumesduoc-frontend`, **Solo las cuentas de este directorio**, URI de redirección tipo **Aplicación de página única (SPA)** = `http://localhost:5173`.
+5. Copia el **Id. de aplicación (cliente)** y el **Id. de directorio (inquilino)**.
+
+**C. Exponer la API**
+6. **Exponer una API** → **Agregar** URI de id. de aplicación → deja `api://<client-id>` → **Guardar**.
+7. **Agregar un ámbito**: nombre `access_as_user`, consentimiento **Administradores y usuarios**, **Habilitado**.
+8. **Permisos de API** → **Agregar un permiso** → **Mis API** → `access_as_user` → **Conceder consentimiento de administrador**.
+9. No cambies la versión del token en el Manifiesto (`requestedAccessTokenVersion` en `null`): los servicios validan la audiencia `api://<client-id>`.
+
+**D. Usuario de prueba**
+10. **Usuarios** → **Nuevo usuario** → **Crear usuario**.
+
+**E. Configurar el proyecto** — en `PerfumesDuoc/.env`:
+```
+JWT_MODE=azure
+AZURE_TENANT_ID=<tenant-id>
+AZURE_CLIENT_ID=<client-id>
+```
+Luego `docker compose up -d --build` (el frontend se recompila con esos valores).
+
+**F. Evidencia** — inicia sesión, copia el token de la cabecera `Authorization` (pestaña Network) y pégalo en [jwt.ms](https://jwt.ms): `aud = api://<client-id>`, `scp = access_as_user`, `tid` = tu tenant.
+
+## 4. API Gateway y CORS
+
+El navegador solo conoce una URL: la del gateway. Ningún microservicio tiene CORS ni se expone al frontend.
+
+**Local (Kong, declarativo):** `gateway/kong/kong.yml` define las rutas `/api/*` y el plugin `cors` con el origen del frontend. No hay código de proxy en el backend.
+
+**AWS API Gateway (HTTP API):** `gateway/aws/api-gateway.yml` crea el gateway con CORS, un **JWT Authorizer** nativo de Entra ID e integraciones HTTP directas a cada microservicio.
+
+1. Levanta el backend en una EC2 (`docker compose up -d --build`) y abre en su Security Group los puertos 4001-4007 y 8083.
+2. Despliega la plantilla (consola de CloudFormation → *Create stack* → subir archivo, o por CLI):
+   ```bash
+   aws cloudformation deploy --stack-name perfumesduoc-gateway \
+     --template-file gateway/aws/api-gateway.yml \
+     --parameter-overrides BackendHost=<dns-publico-ec2> FrontendOrigin=<url-del-frontend> \
+       AzureTenantId=<tenant-id> AzureClientId=<client-id>
    ```
-   VITE_AUTH_MODE=azure
-   VITE_AZURE_CLIENT_ID=<client-id>
-   VITE_AZURE_TENANT_ID=<tenant-id>
-   ```
-5. En `docker-compose.yml` (o `.env` raíz) cambia `JWT_MODE=azure` y define
-   `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` iguales a los anteriores, para que el
-   gateway y los microservicios validen el JWT contra las llaves públicas
-   (JWKS) reales de tu tenant.
+3. Copia la salida `ApiGatewayUrl` a `VITE_API_GATEWAY_URL` en `.env`, ajusta `WEBPAY_RETURN_URL=<url-del-frontend>/callback` y reconstruye el frontend.
+4. Evidencia: sin token → `401`; con token → `200`; el preflight `OPTIONS` devuelve `access-control-allow-origin`.
 
-## 4. Cómo desplegar el AWS API Gateway real
+> La plantilla pasa `cfn-lint`, pero no fue desplegada en una cuenta AWS real.
 
-Ver `gateway/aws/README.md`. Resumen: `serverless deploy` crea el API Gateway
-con un Lambda Authorizer que valida el JWT de Azure AD; las rutas reenvían
-hacia donde tengas corriendo los contenedores (ECS/EKS/EC2/Load Balancer).
+## 5. Kafka: tópicos
 
-## 5. Probar notificaciones desde Postman
+| Tópico | Produce | Consume (consumer group) | Para qué |
+|---|---|---|---|
+| `payment-attempts` | mspago | mspago (`payment-velocity-group`) | Cada intento de pago; alimenta la detección de fraude |
+| `fraud-alerts` | mspago | notifications-service (`notifications-fraude-group`) | Aviso al equipo de seguridad cuando se bloquea un cliente |
+| `payment-results` | mspago | orders-service (`orders-pagos-group`) | Resultado del pago; marca la orden como pagada |
+| `orders-paid` | orders-service | recommendations-service (`recommendations-group`) | Historial de compras para recomendar |
 
-Importa `postman/PerfumesDuoc.postman_collection.json`. Incluye:
+## 6. Pago con Webpay y detección temprana de fraude (mspago)
 
-- `POST {{gateway}}/dev/login-local` → obtiene un JWT de prueba.
-- `POST {{notifications}}/notificaciones/correo` → dispara un correo directo
-  (cumple el requisito "debe permitir ser probado enviando una petición
-  directa desde Postman"). Por defecto corre en modo `EMAIL_SIMULATION=true`
-  y deja el correo "enviado" en los logs del contenedor
-  (`docker logs perfumesduoc-notifications`) — sirve como evidencia si no
-  tienes un SMTP real; si tienes uno, configura `SMTP_*` en `.env` y pon
-  `EMAIL_SIMULATION=false`.
-- Endpoints de catálogo, carrito, cupones y órdenes con y sin token, para
-  evidenciar los 401/403 del JWT Authorizer.
+Flujo del botón **Pagar con Webpay**:
 
-## 6. Checklist de entregables (según Enunciado_2.docx)
+1. El carrito crea la orden (`pendiente_pago`). El precio se vuelve a leer del catálogo, no del navegador.
+2. `POST /api/pagos/iniciar {ordenId}`: mspago toma el cliente del JWT y el monto desde orders-service.
+3. Si el cliente está bloqueado responde **429** y no llega a Webpay.
+4. Publica el intento en `payment-attempts` y crea la transacción en Webpay Plus.
+5. El cliente paga en Transbank y vuelve a `/callback`; mspago hace el `commit` y publica en `payment-results`.
+6. orders-service marca la orden `pagada`, descuenta stock y envía el correo (RabbitMQ) y publica `orders-paid`.
 
-- [ ] Repos de GitHub separados por componente (frontend, cada microservicio,
-      gateway). Sugerencia: sube cada carpeta como su propio repo o usa
-      submódulos/mono-repo con carpetas claramente separadas (como ya está).
-- [ ] Evidencia del login en el Frontend obteniendo el token de Azure AD
-      (captura del DevTools mostrando el `id_token`/`access_token`).
-- [ ] Capturas del API Gateway (o del gateway simulado) mostrando 401/403 sin
-      token vs 200 con token válido (colección de Postman incluida).
-- [ ] Evidencia de RabbitMQ: panel de management mostrando la cola
-      `products.orden-creada` consumida tras una compra, y el stock
-      actualizado en la tabla `productos`.
-- [ ] Evidencia de `notifications-service`: log del correo simulado o correo
-      real recibido, probado desde Postman.
-- [ ] Evidencia de `coupons-service`: aplicar un cupón (`BIENVENIDO10`) en el
-      checkout y mostrar el registro en `cupones_uso_log` tras el evento
-      `cupon.usado`.
+**Regla de fraude (velocity check):** 3 intentos del mismo cliente en menos de 10 segundos → bloqueo automático de 30 minutos y alerta en `fraud-alerts`. Configurable con `FRAUDE_MAX_INTENTOS`, `FRAUDE_VENTANA_SEGUNDOS`, `FRAUDE_BLOQUEO_MINUTOS`. La clave del mensaje es el id del cliente, así sus intentos se procesan en orden.
 
-## 7. Estructura del repositorio
+**Seguridad del pago:** la tarjeta se ingresa solo en Transbank; mspago guarda en la tabla `pagos` la orden, cliente, monto, estado, código de autorización y los últimos 4 dígitos. Un token de Webpay solo se confirma una vez y el monto confirmado debe coincidir con el de la orden.
+
+**Tarjetas de prueba** (RUT `11.111.111-1`, clave `123`):
+
+| Tarjeta | Número | CVV | Resultado |
+|---|---|---|---|
+| VISA | 4051 8856 0044 6623 | 123 | Aprobada |
+| MASTERCARD | 5186 0595 5959 0568 | 123 | Rechazada |
+
+**Probar el fraude** (colección Postman o terminal):
+```bash
+TOKEN=$(curl -s -X POST localhost:8080/dev/login-local -H 'Content-Type: application/json' \
+  -d '{"email":"bot@duoc.cl"}' | sed 's/.*"token":"\([^"]*\)".*/\1/')
+for i in 1 2 3 4 5; do curl -s -o /dev/null -w "%{http_code}\n" -X POST localhost:8080/api/pagos/iniciar \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"ordenId":1}'; done
+```
+Los últimos intentos responden `429`. Evidencia: `docker logs perfumesduoc-mspago | grep FRAUDE`, el mensaje en `fraud-alerts` (Kafka UI) y el correo simulado en `docker logs perfumesduoc-notifications`.
+
+## 7. ¿Las colas de la Evaluación 2 se mantienen o se migran a Kafka?
+
+**Se mantienen en RabbitMQ.** Kafka se agrega para los flujos nuevos; no reemplaza a las colas.
+
+| | RabbitMQ (colas) | Kafka (tópicos) |
+|---|---|---|
+| Modelo | El mensaje es una **tarea**: se entrega a un consumidor y se borra al confirmarse | El mensaje es un **hecho** que queda en un log y puede releerse |
+| Consumidores | Uno procesa cada mensaje | Varios grupos leen el mismo flujo, cada uno a su ritmo |
+| Fortaleza | Ruteo flexible, reintentos y confirmación por mensaje | Alto volumen, orden por clave, historial y relectura |
+
+- `orden.creada` (descontar stock), `orden.confirmada` (enviar correo) y los eventos de cupones son **tareas** que deben ejecutarse una sola vez por un único servicio. Eso es exactamente una cola; migrarlas no aporta nada y agrega riesgo.
+- Los intentos de pago son un **flujo de eventos** de alto volumen que hay que analizar en orden por cliente y en milisegundos, y que conviene conservar para auditoría: eso es Kafka.
+- `payment-results` y `orders-paid` los pueden leer varios servicios distintos (órdenes, recomendaciones, a futuro analítica) sin quitarse mensajes entre sí.
+
+## 8. Evidencias para la defensa
+
+- Login con Entra ID y token en jwt.ms (sección 3).
+- `401` sin token y `200` con token a través del gateway; cabeceras CORS del gateway.
+- Compra completa con tarjeta VISA de prueba y orden en estado **Pagada**.
+- Kafka UI con los 4 tópicos y sus mensajes.
+- Bloqueo por fraude (`429`) y alerta.
+- **Mi perfil** guardado y recomendaciones que cambian después de comprar.
+
+## 9. Estructura
 
 ```
 PerfumesDuoc/
-├── docker-compose.yml
-├── gateway/                 # AWS API Gateway (simulado) + artefactos AWS reales
-├── services/
-│   ├── products-service/
-│   ├── cart-service/
-│   ├── orders-service/
-│   ├── notifications-service/
-│   └── coupons-service/     # microservicio nuevo a elección
-├── frontend/                # React + Vite + Tailwind + MSAL (Azure AD)
+├── docker-compose.yml   .env.example
+├── gateway/kong/kong.yml          # API Gateway local
+├── gateway/aws/api-gateway.yml    # AWS API Gateway (CloudFormation)
+├── frontend/                      # React + Vite + Tailwind + MSAL
+├── services/                      # 7 microservicios Node + mspago (Spring Boot)
 └── postman/
 ```

@@ -58,24 +58,21 @@ export default function Carrito() {
     setCodigo('');
   }
 
-  async function confirmarCompra() {
-    // El cupón solo se usa si ya fue validado ('aplicado'). Si sigue
-    // 'pendiente' (servicio de cupones apagado) o es inválido, la compra
-    // se confirma igual, sin descuento.
-    const { data: orden } = await api.post('/api/ordenes', {
-      items: carrito.items,
-      cuponCodigo: cupon?.estado === 'aplicado' ? cupon.codigo : undefined,
-    });
-    await api.delete('/api/carrito');
-    navigate(`/orden-confirmada/${orden.id}`, {
-      state: {
-        cuponEstado: orden.cupon_estado,
-        cuponMensaje: orden.cupon_mensaje,
-        cuponPendiente: cupon?.estado === 'pendiente',
-        descuento: orden.descuento,
-        total: orden.total,
-      },
-    });
+  // Crea la orden (queda "pendiente_pago") y lleva al cliente a pagarla.
+  // El cupón solo se usa si ya fue validado ('aplicado'); si sigue
+  // 'pendiente' o es inválido, la orden se crea igual, sin descuento.
+  async function irAPagar() {
+    setError('');
+    try {
+      const { data: orden } = await api.post('/api/ordenes', {
+        items: carrito.items,
+        cuponCodigo: cupon?.estado === 'aplicado' ? cupon.codigo : undefined,
+      });
+      await api.delete('/api/carrito');
+      navigate(`/pago/${orden.id}`);
+    } catch (err) {
+      setError(err.response?.data?.error || 'No se pudo crear la orden');
+    }
   }
 
   const colorCupon =
@@ -142,8 +139,8 @@ export default function Carrito() {
             <span>Total</span>
             <span>${total.toLocaleString('es-CL')}</span>
           </div>
-          <button onClick={confirmarCompra} className="w-full bg-perfume-dark text-white py-3 rounded-lg">
-            Confirmar compra
+          <button onClick={irAPagar} className="w-full bg-perfume-dark text-white py-3 rounded-lg">
+            Ir a pagar
           </button>
         </>
       )}

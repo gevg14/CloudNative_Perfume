@@ -1,0 +1,17 @@
+{
+  "name": "recommendations-service",
+  "version": "1.0.0",
+  "description": "PerfumesDuoc - Microservicio de Recomendaciones. Consume las compras desde Kafka y sugiere perfumes según historial y popularidad.",
+  "main": "src/app.js",
+  "scripts": { "start": "node src/app.js", "dev": "nodemon src/app.js" },
+  "dependencies": {
+    "axios": "^1.7.7",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "jwks-rsa": "^3.1.0",
+    "kafkajs": "^2.2.4",
+    "pg": "^8.12.0"
+  },
+  "devDependencies": { "nodemon": "^3.1.0" }
+}

@@ -20,7 +20,6 @@ dns.lookup = (hostname, options, callback) => {
 
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
 const axios = require('axios');
 const amqp = require('amqplib');
 const requireAuth = require('./auth');
@@ -28,7 +27,7 @@ const requireAuth = require('./auth');
 const EXCHANGE = 'perfumesduoc.events';
 
 const app = express();
-app.use(cors());
+// Sin CORS aquí: el navegador solo habla con el API Gateway.
 app.use(express.json());
 
 // Carrito en memoria por usuario (userId = "sub" del JWT ya validado).

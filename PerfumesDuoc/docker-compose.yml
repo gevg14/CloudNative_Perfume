@@ -1,18 +1,16 @@
 # ============================================================================
-# PerfumesDuoc - Arquitectura de Microservicios (simulación local)
+# PerfumesDuoc - Arquitectura de Microservicios (Evaluación 3)
 # ----------------------------------------------------------------------------
-# Este docker-compose levanta TODO el ecosistema en tu máquina para que puedas
-# desarrollar y grabar evidencias sin depender de cuentas reales de Azure/AWS:
-#   - RabbitMQ (mensajería asíncrona entre microservicios)
-#   - PostgreSQL (una BD por servicio, esquema propio)
-#   - api-gateway  -> simula el AWS API Gateway + JWT Authorizer
-#   - products-service, cart-service, orders-service,
-#     notifications-service, coupons-service (microservicio a elección)
+# Levanta todo el ecosistema en tu máquina:
+#   - api-gateway (Kong): único punto de entrada del frontend, con CORS
+#   - Kafka (4 tópicos) + Kafka UI, RabbitMQ, PostgreSQL
+#   - products, cart, orders, notifications, coupons, profile,
+#     recommendations (Node) y mspago (Spring Boot + Kafka + Webpay)
 #   - frontend (React + Vite)
 #
-# Para producción real, ver README.md sección "Despliegue real en AWS/Azure":
-# ahí se explica cómo reemplazar api-gateway por AWS API Gateway real
-# (gateway/aws/serverless.yml) y el login mock por Azure AD real (MSAL).
+# Variables: copia .env.example a .env. Sin .env se usa el login local
+# simulado (JWT_MODE=local); con los datos del tenant se usa Azure AD real.
+# Despliegue en la nube: ver README.md y gateway/aws.
 # ============================================================================
 
 services:
@@ -28,6 +26,62 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+
+  # Kafka (Evaluación 3) en modo KRaft, un solo nodo, sin Zookeeper.
+  # Dentro de la red de Docker los servicios usan kafka:9092; desde tu
+  # máquina (por ejemplo con una herramienta de escritorio) usa localhost:29092.
+  kafka:
+    image: apache/kafka:3.9.1
+    container_name: perfumesduoc-kafka
+    ports:
+      - "29092:29092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 15s
+
+  # Crea los tópicos de forma explícita y termina.
+  kafka-init:
+    image: apache/kafka:3.9.1
+    container_name: perfumesduoc-kafka-init
+    depends_on:
+      kafka: { condition: service_healthy }
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        for topico in payment-attempts payment-results fraud-alerts orders-paid; do
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 \
+            --create --if-not-exists --topic $$topico --partitions 3 --replication-factor 1
+        done
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list
+
+  # Panel web para ver tópicos, mensajes y consumer groups: http://localhost:8085
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    container_name: perfumesduoc-kafka-ui
+    ports:
+      - "8085:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: perfumesduoc
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    depends_on:
+      kafka: { condition: service_healthy }
 
   postgres:
     image: postgres:16-alpine
@@ -50,27 +104,27 @@ services:
       retries: 10
       start_period: 10s
 
+  # API Gateway local: Kong en modo declarativo (sin base de datos).
+  # Rutas y CORS están en gateway/kong/kong.yml. En la nube este papel lo
+  # cumple AWS API Gateway (gateway/aws/api-gateway.yml).
   api-gateway:
-    build: ./gateway
+    image: kong:3.9
     container_name: perfumesduoc-gateway
     ports:
-      - "8080:8080"
+      - "8080:8000"
     environment:
-      - PORT=8080
-      - JWT_MODE=${JWT_MODE:-local}          # local | azure
-      - LOCAL_JWT_SECRET=${LOCAL_JWT_SECRET:-perfumesduoc_dev_secret}
-      - AZURE_TENANT_ID=${AZURE_TENANT_ID:-}
-      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID:-}
-      - PRODUCTS_URL=http://products-service:4001
-      - CART_URL=http://cart-service:4002
-      - ORDERS_URL=http://orders-service:4003
-      - NOTIFICATIONS_URL=http://notifications-service:4004
-      - COUPONS_URL=http://coupons-service:4005
-    depends_on:
-      products-service: { condition: service_started }
-      cart-service: { condition: service_started }
-      orders-service: { condition: service_started }
-      notifications-service: { condition: service_started }
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /kong/kong.yml
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_LISTEN: "off"
+    volumes:
+      - ./gateway/kong/kong.yml:/kong/kong.yml:ro
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   products-service:
     build: ./services/products-service
@@ -112,6 +166,8 @@ services:
       - PORT=4003
       - DATABASE_URL=postgres://perfumesduoc:perfumesduoc@postgres:5432/perfumesduoc
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+      - KAFKA_BROKERS=kafka:9092
+      - PRODUCTS_URL=http://products-service:4001
       - COUPONS_URL=http://coupons-service:4005
       - JWT_MODE=${JWT_MODE:-local}
       - LOCAL_JWT_SECRET=${LOCAL_JWT_SECRET:-perfumesduoc_dev_secret}
@@ -120,6 +176,7 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
       # Sin dependencia de coupons-service: los cupones son opcionales y
       # la compra debe funcionar aunque ese microservicio esté apagado.
 
@@ -130,6 +187,8 @@ services:
     environment:
       - PORT=4004
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+      - KAFKA_BROKERS=kafka:9092
+      - ALERTAS_EMAIL=${ALERTAS_EMAIL:-seguridad@perfumesduoc.cl}
       - SMTP_HOST=${SMTP_HOST:-}
       - SMTP_PORT=${SMTP_PORT:-587}
       - SMTP_USER=${SMTP_USER:-}
@@ -138,6 +197,7 @@ services:
       - EMAIL_SIMULATION=${EMAIL_SIMULATION:-true}
     depends_on:
       rabbitmq: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
 
   coupons-service:
     build: ./services/coupons-service
@@ -155,12 +215,76 @@ services:
       postgres: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
 
+  profile-service:
+    build: ./services/profile-service
+    container_name: perfumesduoc-profile
+    ports: ["4006:4006"]
+    environment:
+      - PORT=4006
+      - DATABASE_URL=postgres://perfumesduoc:perfumesduoc@postgres:5432/perfumesduoc
+      - JWT_MODE=${JWT_MODE:-local}
+      - LOCAL_JWT_SECRET=${LOCAL_JWT_SECRET:-perfumesduoc_dev_secret}
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID:-}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID:-}
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  recommendations-service:
+    build: ./services/recommendations-service
+    container_name: perfumesduoc-recommendations
+    ports: ["4007:4007"]
+    environment:
+      - PORT=4007
+      - DATABASE_URL=postgres://perfumesduoc:perfumesduoc@postgres:5432/perfumesduoc
+      - KAFKA_BROKERS=kafka:9092
+      - PRODUCTS_URL=http://products-service:4001
+      - JWT_MODE=${JWT_MODE:-local}
+      - LOCAL_JWT_SECRET=${LOCAL_JWT_SECRET:-perfumesduoc_dev_secret}
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID:-}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID:-}
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+
+  # Microservicio de Pagos: Spring Boot + Kafka + Webpay Plus (integración).
+  # Detección temprana de fraude: FRAUDE_MAX_INTENTOS intentos dentro de
+  # FRAUDE_VENTANA_SEGUNDOS bloquean al cliente FRAUDE_BLOQUEO_MINUTOS.
+  mspago:
+    build: ./services/mspago
+    container_name: perfumesduoc-mspago
+    ports: ["8083:8080"]
+    environment:
+      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/perfumesduoc
+      - SPRING_DATASOURCE_USERNAME=perfumesduoc
+      - SPRING_DATASOURCE_PASSWORD=perfumesduoc
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=update
+      - ORDERS_URL=http://orders-service:4003
+      - WEBPAY_RETURN_URL=${WEBPAY_RETURN_URL:-http://localhost:5173/callback}
+      - FRAUDE_MAX_INTENTOS=${FRAUDE_MAX_INTENTOS:-3}
+      - FRAUDE_VENTANA_SEGUNDOS=${FRAUDE_VENTANA_SEGUNDOS:-10}
+      - FRAUDE_BLOQUEO_MINUTOS=${FRAUDE_BLOQUEO_MINUTOS:-30}
+      - JWT_MODE=${JWT_MODE:-local}
+      - LOCAL_JWT_SECRET=${LOCAL_JWT_SECRET:-perfumesduoc_dev_secret}
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID:-}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID:-}
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+
+  # Las variables VITE_* se fijan al COMPILAR el frontend (por eso van como
+  # "args"). Si cambias el .env, reconstruye: docker compose up -d --build frontend
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        VITE_API_GATEWAY_URL: ${VITE_API_GATEWAY_URL:-http://localhost:8080}
+        VITE_AUTH_MODE: ${JWT_MODE:-local}
+        VITE_AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
+        VITE_AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
+        VITE_AZURE_REDIRECT_URI: ${VITE_AZURE_REDIRECT_URI:-http://localhost:5173}
     container_name: perfumesduoc-frontend
     ports: ["5173:80"]
-    environment:
-      - VITE_API_GATEWAY_URL=http://localhost:8080
     depends_on: [api-gateway]
 
 volumes:

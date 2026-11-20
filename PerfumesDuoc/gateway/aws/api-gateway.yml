@@ -1,0 +1,397 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  PerfumesDuoc - AWS API Gateway (HTTP API). Unico punto de entrada del
+  frontend: CORS configurado en el gateway, JWT Authorizer nativo que valida
+  los tokens de Microsoft Entra ID (Azure AD) e integraciones HTTP directas
+  hacia cada microservicio. No hay Lambdas ni codigo de proxy propio.
+
+Parameters:
+  BackendHost:
+    Type: String
+    Description: DNS o IP publica del servidor (EC2) donde corre docker compose. Ej. ec2-54-1-2-3.compute-1.amazonaws.com
+  FrontendOrigin:
+    Type: String
+    Default: http://localhost:5173
+    Description: Origen del frontend autorizado por CORS (sin barra final)
+  AzureTenantId:
+    Type: String
+    Description: Id. de directorio (inquilino) de Microsoft Entra ID
+  AzureClientId:
+    Type: String
+    Description: Id. de aplicacion (cliente) registrada en Entra ID
+
+Resources:
+  Api:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: perfumesduoc-gateway
+      ProtocolType: HTTP
+      # CORS vive en el gateway: API Gateway responde el preflight (OPTIONS)
+      # y agrega las cabeceras; los microservicios no tienen CORS.
+      CorsConfiguration:
+        AllowOrigins:
+          - !Ref FrontendOrigin
+        AllowMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+        AllowHeaders: [authorization, content-type]
+        MaxAge: 3600
+
+  Stage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref Api
+      StageName: $default
+      AutoDeploy: true
+
+  # JWT Authorizer: valida firma, emisor, audiencia y expiracion del token
+  # de Entra ID ANTES de llamar al microservicio. Sin token valido -> 401.
+  AzureJwtAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref Api
+      Name: azure-entra-id
+      AuthorizerType: JWT
+      IdentitySource:
+        - $request.header.Authorization
+      JwtConfiguration:
+        Issuer: !Sub https://sts.windows.net/${AzureTenantId}/
+        Audience:
+          - !Sub api://${AzureClientId}
+
+  # ---- /api/productos -> /productos (puerto 4001) ----
+  IntegracionProductosBase:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref Api
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      PayloadFormatVersion: "1.0"
+      IntegrationUri: !Sub http://${BackendHost}:4001/productos
+
+  IntegracionProductosProxy:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref Api
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      PayloadFormatVersion: "1.0"
+      IntegrationUri: !Sub http://${BackendHost}:4001/productos/{proxy}
+
+  RutaProductosBase:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: ANY /api/productos
+      Target: !Sub integrations/${IntegracionProductosBase}
+      AuthorizationType: JWT
+      AuthorizerId: !Ref AzureJwtAuthorizer
+
+  RutaProductosProxy:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: ANY /api/productos/{proxy+}
+      Target: !Sub integrations/${IntegracionProductosProxy}
+      AuthorizationType: JWT
+      AuthorizerId: !Ref AzureJwtAuthorizer
+
+  # El catalogo es publico: GET sin token
+  RutaProductosPublicaBase:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: GET /api/productos
+      Target: !Sub integrations/${IntegracionProductosBase}
+
+  RutaProductosPublicaProxy:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: GET /api/productos/{proxy+}
+      Target: !Sub integrations/${IntegracionProductosProxy}
+
+  # ---- /api/carrito -> /carrito (puerto 4002) ----
+  IntegracionCarritoBase:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref Api
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      PayloadFormatVersion: "1.0"
+      IntegrationUri: !Sub http://${BackendHost}:4002/carrito
+
+  IntegracionCarritoProxy:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref Api
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      PayloadFormatVersion: "1.0"
+      IntegrationUri: !Sub http://${BackendHost}:4002/carrito/{proxy}
+
+  RutaCarritoBase:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: ANY /api/carrito
+      Target: !Sub integrations/${IntegracionCarritoBase}
+      AuthorizationType: JWT
+      AuthorizerId: !Ref AzureJwtAuthorizer
+
+  RutaCarritoProxy:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: ANY /api/carrito/{proxy+}
+      Target: !Sub integrations/${IntegracionCarritoProxy}
+      AuthorizationType: JWT
+      AuthorizerId: !Ref AzureJwtAuthorizer
+
+  # ---- /api/ordenes -> /ordenes (puerto 4003) ----
+  IntegracionOrdenesBase:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref Api
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      PayloadFormatVersion: "1.0"
+      IntegrationUri: !Sub http://${BackendHost}:4003/ordenes
+
+  IntegracionOrdenesProxy:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref Api
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      PayloadFormatVersion: "1.0"
+      IntegrationUri: !Sub http://${BackendHost}:4003/ordenes/{proxy}
+
+  RutaOrdenesBase:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: ANY /api/ordenes
+      Target: !Sub integrations/${IntegracionOrdenesBase}
+      AuthorizationType: JWT
+      AuthorizerId: !Ref AzureJwtAuthorizer
+
+  RutaOrdenesProxy:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: ANY /api/ordenes/{proxy+}
+      Target: !Sub integrations/${IntegracionOrdenesProxy}
+      AuthorizationType: JWT
+      AuthorizerId: !Ref AzureJwtAuthorizer
+
+  # ---- /api/notificaciones -> /notificaciones (puerto 4004) ----
+  IntegracionNotificacionesBase:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref Api
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      PayloadFormatVersion: "1.0"
+      IntegrationUri: !Sub http://${BackendHost}:4004/notificaciones
+
+  IntegracionNotificacionesProxy:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref Api
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      PayloadFormatVersion: "1.0"
+      IntegrationUri: !Sub http://${BackendHost}:4004/notificaciones/{proxy}
+
+  RutaNotificacionesBase:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: ANY /api/notificaciones
+      Target: !Sub integrations/${IntegracionNotificacionesBase}
+      AuthorizationType: JWT
+      AuthorizerId: !Ref AzureJwtAuthorizer
+
+  RutaNotificacionesProxy:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: ANY /api/notificaciones/{proxy+}
+      Target: !Sub integrations/${IntegracionNotificacionesProxy}
+      AuthorizationType: JWT
+      AuthorizerId: !Ref AzureJwtAuthorizer
+
+  # ---- /api/cupones -> /cupones (puerto 4005) ----
+  IntegracionCuponesBase:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref Api
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      PayloadFormatVersion: "1.0"
+      IntegrationUri: !Sub http://${BackendHost}:4005/cupones
+
+  IntegracionCuponesProxy:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref Api
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      PayloadFormatVersion: "1.0"
+      IntegrationUri: !Sub http://${BackendHost}:4005/cupones/{proxy}
+
+  RutaCuponesBase:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: ANY /api/cupones
+      Target: !Sub integrations/${IntegracionCuponesBase}
+      AuthorizationType: JWT
+      AuthorizerId: !Ref AzureJwtAuthorizer
+
+  RutaCuponesProxy:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: ANY /api/cupones/{proxy+}
+      Target: !Sub integrations/${IntegracionCuponesProxy}
+      AuthorizationType: JWT
+      AuthorizerId: !Ref AzureJwtAuthorizer
+
+  # ---- /api/perfil -> /perfil (puerto 4006) ----
+  IntegracionPerfilBase:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref Api
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      PayloadFormatVersion: "1.0"
+      IntegrationUri: !Sub http://${BackendHost}:4006/perfil
+
+  IntegracionPerfilProxy:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref Api
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      PayloadFormatVersion: "1.0"
+      IntegrationUri: !Sub http://${BackendHost}:4006/perfil/{proxy}
+
+  RutaPerfilBase:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: ANY /api/perfil
+      Target: !Sub integrations/${IntegracionPerfilBase}
+      AuthorizationType: JWT
+      AuthorizerId: !Ref AzureJwtAuthorizer
+
+  RutaPerfilProxy:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: ANY /api/perfil/{proxy+}
+      Target: !Sub integrations/${IntegracionPerfilProxy}
+      AuthorizationType: JWT
+      AuthorizerId: !Ref AzureJwtAuthorizer
+
+  # ---- /api/recomendaciones -> /recomendaciones (puerto 4007) ----
+  IntegracionRecomendacionesBase:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref Api
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      PayloadFormatVersion: "1.0"
+      IntegrationUri: !Sub http://${BackendHost}:4007/recomendaciones
+
+  IntegracionRecomendacionesProxy:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref Api
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      PayloadFormatVersion: "1.0"
+      IntegrationUri: !Sub http://${BackendHost}:4007/recomendaciones/{proxy}
+
+  RutaRecomendacionesBase:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: ANY /api/recomendaciones
+      Target: !Sub integrations/${IntegracionRecomendacionesBase}
+      AuthorizationType: JWT
+      AuthorizerId: !Ref AzureJwtAuthorizer
+
+  RutaRecomendacionesProxy:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: ANY /api/recomendaciones/{proxy+}
+      Target: !Sub integrations/${IntegracionRecomendacionesProxy}
+      AuthorizationType: JWT
+      AuthorizerId: !Ref AzureJwtAuthorizer
+
+  # Los mas vendidos son publicos
+  RutaRecomendacionesPopulares:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: GET /api/recomendaciones/populares
+      Target: !Sub integrations/${IntegracionRecomendacionesProxy}
+
+  # ---- /api/pagos -> /api/pagos (puerto 8083) ----
+  IntegracionPagosBase:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref Api
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      PayloadFormatVersion: "1.0"
+      IntegrationUri: !Sub http://${BackendHost}:8083/api/pagos
+
+  IntegracionPagosProxy:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref Api
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      PayloadFormatVersion: "1.0"
+      IntegrationUri: !Sub http://${BackendHost}:8083/api/pagos/{proxy}
+
+  RutaPagosBase:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: ANY /api/pagos
+      Target: !Sub integrations/${IntegracionPagosBase}
+      AuthorizationType: JWT
+      AuthorizerId: !Ref AzureJwtAuthorizer
+
+  RutaPagosProxy:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: ANY /api/pagos/{proxy+}
+      Target: !Sub integrations/${IntegracionPagosProxy}
+      AuthorizationType: JWT
+      AuthorizerId: !Ref AzureJwtAuthorizer
+
+  # Retorno desde Webpay: el navegador vuelve de Transbank y se identifica con el token de la transaccion
+  RutaPagosCommit:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: POST /api/pagos/commit
+      Target: !Sub integrations/${IntegracionPagosProxy}
+
+  RutaPagosAnular:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: POST /api/pagos/anular
+      Target: !Sub integrations/${IntegracionPagosProxy}
+
+Outputs:
+  ApiGatewayUrl:
+    Description: URL del API Gateway. Usala como VITE_API_GATEWAY_URL en el frontend.
+    Value: !Sub https://${Api}.execute-api.${AWS::Region}.amazonaws.com

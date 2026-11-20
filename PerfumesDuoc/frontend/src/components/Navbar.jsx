@@ -14,6 +14,7 @@ export default function Navbar() {
         {user ? (
           <>
             <Link to="/mis-ordenes">Mis Órdenes</Link>
+            <Link to="/perfil">Mi perfil</Link>
             <span className="text-perfume-gold">{user.name || user.preferred_username}</span>
             <button onClick={() => { logout(); navigate('/'); }} className="underline">Salir</button>
           </>

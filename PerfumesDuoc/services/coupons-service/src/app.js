@@ -20,13 +20,12 @@ dns.lookup = (hostname, options, callback) => {
 
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
 const pool = require('./db');
 const requireAuth = require('./auth');
 const { connectRabbit, publish, consumeCuponUsado, consumeCuponSolicitado } = require('./rabbitmq');
 
 const app = express();
-app.use(cors());
+// Sin CORS aquí: el navegador solo habla con el API Gateway.
 app.use(express.json());
 
 app.get('/health', (req, res) => res.json({ status: 'ok', service: 'coupons-service' }));
