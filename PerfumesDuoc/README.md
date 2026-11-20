@@ -142,7 +142,7 @@ TOKEN=$(curl -s -X POST localhost:8080/dev/login-local -H 'Content-Type: applica
 for i in 1 2 3 4 5; do curl -s -o /dev/null -w "%{http_code}\n" -X POST localhost:8080/api/pagos/iniciar \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"ordenId":1}'; done
 ```
-Los últimos intentos responden `429`. Evidencia: `docker logs perfumesduoc-mspago | grep FRAUDE`, el mensaje en `fraud-alerts` (Kafka UI) y el correo simulado en `docker logs perfumesduoc-notifications`.
+Desde el cuarto o quinto intento responde `429` (la detección es asíncrona por Kafka, por eso puede pasar un intento más antes del bloqueo). Evidencia: `docker logs perfumesduoc-mspago | grep FRAUDE`, el mensaje en `fraud-alerts` (Kafka UI) y el correo simulado en `docker logs perfumesduoc-notifications`.
 
 ## 7. ¿Las colas de la Evaluación 2 se mantienen o se migran a Kafka?
 
