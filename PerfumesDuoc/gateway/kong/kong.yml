@@ -1,0 +1,72 @@
+# ============================================================================
+# API Gateway local (Kong en modo declarativo, sin base de datos).
+# Es el ÚNICO punto de entrada del frontend: http://localhost:8080
+#
+#  - Enruta /api/<recurso> hacia el microservicio correspondiente.
+#  - Responde CORS (plugin "cors"): los microservicios NO tienen CORS.
+#  - El JWT lo valida cada microservicio. En la nube (AWS API Gateway,
+#    ver gateway/aws) el JWT se valida además en el propio gateway.
+#
+# strip_path quita el prefijo de la ruta y Kong le antepone el path de "url":
+#   GET /api/productos/5  ->  http://products-service:4001/productos/5
+# ============================================================================
+_format_version: "3.0"
+
+plugins:
+  - name: cors
+    config:
+      # Orígenes del frontend autorizados. Agrega aquí la URL pública del
+      # frontend cuando lo despliegues.
+      origins:
+        - http://localhost:5173
+      methods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+      headers: [Authorization, Content-Type]
+      max_age: 3600
+      credentials: false
+
+services:
+  - name: products-service
+    url: http://products-service:4001/productos
+    routes:
+      - { name: productos, paths: [/api/productos], strip_path: true }
+
+  - name: cart-service
+    url: http://cart-service:4002/carrito
+    routes:
+      - { name: carrito, paths: [/api/carrito], strip_path: true }
+
+  - name: orders-service
+    url: http://orders-service:4003/ordenes
+    routes:
+      - { name: ordenes, paths: [/api/ordenes], strip_path: true }
+
+  - name: notifications-service
+    url: http://notifications-service:4004/notificaciones
+    routes:
+      - { name: notificaciones, paths: [/api/notificaciones], strip_path: true }
+
+  - name: coupons-service
+    url: http://coupons-service:4005/cupones
+    routes:
+      - { name: cupones, paths: [/api/cupones], strip_path: true }
+
+  - name: profile-service
+    url: http://profile-service:4006/perfil
+    routes:
+      - { name: perfil, paths: [/api/perfil], strip_path: true }
+
+  - name: recommendations-service
+    url: http://recommendations-service:4007/recomendaciones
+    routes:
+      - { name: recomendaciones, paths: [/api/recomendaciones], strip_path: true }
+
+  - name: mspago
+    url: http://mspago:8080/api/pagos
+    routes:
+      - { name: pagos, paths: [/api/pagos], strip_path: true }
+
+  # Solo para desarrollo (JWT_MODE=local): login simulado sin tenant de Azure.
+  - name: dev-login
+    url: http://profile-service:4006/dev/login-local
+    routes:
+      - { name: dev-login, paths: [/dev/login-local], strip_path: true, methods: [POST, OPTIONS] }

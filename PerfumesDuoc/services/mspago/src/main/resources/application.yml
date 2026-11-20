@@ -1,0 +1,53 @@
+server:
+  port: ${PORT:8080}
+
+spring:
+  application:
+    name: pago
+
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://postgres:5432/perfumesduoc}
+    username: ${SPRING_DATASOURCE_USERNAME:perfumesduoc}
+    password: ${SPRING_DATASOURCE_PASSWORD:perfumesduoc}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      connection-timeout: 30000
+      validation-timeout: 5000
+
+  jpa:
+    hibernate:
+      ddl-auto: ${SPRING_JPA_HIBERNATE_DDL_AUTO:update}
+    show-sql: false
+
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    consumer:
+      group-id: payment-velocity-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
+        spring.json.value.default.type: com.kafka.pago.dto.IntentoPagoDTO
+        spring.json.use.type.headers: false
+    listener:
+      missing-topics-fatal: false
+      auto-startup: true
+
+pago:
+  # Regla de Velocity Check: N intentos dentro de la ventana -> bloqueo temporal
+  fraude:
+    max-intentos: ${FRAUDE_MAX_INTENTOS:3}
+    ventana-segundos: ${FRAUDE_VENTANA_SEGUNDOS:10}
+    bloqueo-minutos: ${FRAUDE_BLOQUEO_MINUTOS:30}
+  # URL del frontend a la que Webpay devuelve al cliente (CallbackPage)
+  return-url: ${WEBPAY_RETURN_URL:http://localhost:5173/callback}
+  orders-url: ${ORDERS_URL:http://orders-service:4003}
+  jwt:
+    mode: ${JWT_MODE:local}
+    local-secret: ${LOCAL_JWT_SECRET:perfumesduoc_dev_secret}
+    azure-tenant-id: ${AZURE_TENANT_ID:}
+    azure-client-id: ${AZURE_CLIENT_ID:}

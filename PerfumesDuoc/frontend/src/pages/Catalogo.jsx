@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import api from '../lib/api';
 import ProductCard from '../components/ProductCard';
+import Recomendaciones from '../components/Recomendaciones';
 
 export default function Catalogo() {
   const [productos, setProductos] = useState([]);
@@ -39,6 +40,8 @@ export default function Catalogo() {
       </div>
 
       {mensaje && <div className="mb-4 text-sm bg-perfume-gold/20 border border-perfume-gold rounded p-2">{mensaje}</div>}
+
+      <Recomendaciones onAdd={agregarAlCarrito} />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         {productos.map((p) => (

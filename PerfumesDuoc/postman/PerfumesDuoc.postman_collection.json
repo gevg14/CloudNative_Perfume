@@ -5,33 +5,61 @@
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "gateway", "value": "http://localhost:8080" },
-    { "key": "notifications", "value": "http://localhost:4004" },
-    { "key": "token", "value": "" }
+    {
+      "key": "gateway",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "notifications",
+      "value": "http://localhost:4004"
+    },
+    {
+      "key": "token",
+      "value": ""
+    }
   ],
   "item": [
     {
       "name": "1. Login local (obtener JWT de prueba)",
       "request": {
         "method": "POST",
-        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
         "url": "{{gateway}}/dev/login-local",
-        "body": { "mode": "raw", "raw": "{\"email\": \"cliente@duoc.cl\"}" }
+        "body": {
+          "mode": "raw",
+          "raw": "{\"email\": \"cliente@duoc.cl\"}"
+        }
       }
     },
     {
       "name": "2. Catálogo (público, sin token)",
-      "request": { "method": "GET", "url": "{{gateway}}/api/productos" }
+      "request": {
+        "method": "GET",
+        "url": "{{gateway}}/api/productos"
+      }
     },
     {
       "name": "3. Carrito SIN token -> debe dar 401",
-      "request": { "method": "GET", "url": "{{gateway}}/api/carrito" }
+      "request": {
+        "method": "GET",
+        "url": "{{gateway}}/api/carrito"
+      }
     },
     {
       "name": "4. Carrito CON token -> 200",
       "request": {
         "method": "GET",
-        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
         "url": "{{gateway}}/api/carrito"
       }
     },
@@ -40,20 +68,35 @@
       "request": {
         "method": "POST",
         "header": [
-          { "key": "Authorization", "value": "Bearer {{token}}" },
-          { "key": "Content-Type", "value": "application/json" }
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
         ],
         "url": "{{gateway}}/api/carrito/items",
-        "body": { "mode": "raw", "raw": "{\"productoId\": 1, \"cantidad\": 2}" }
+        "body": {
+          "mode": "raw",
+          "raw": "{\"productoId\": 1, \"cantidad\": 2}"
+        }
       }
     },
     {
-      "name": "6. Confirmar orden (dispara RabbitMQ: stock + correo + cupón)",
+      "name": "6. Crear orden (queda pendiente_pago)",
       "request": {
         "method": "POST",
         "header": [
-          { "key": "Authorization", "value": "Bearer {{token}}" },
-          { "key": "Content-Type", "value": "application/json" }
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
         ],
         "url": "{{gateway}}/api/ordenes",
         "body": {
@@ -66,12 +109,136 @@
       "name": "7. Notificación directa desde Postman",
       "request": {
         "method": "POST",
-        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
         "url": "{{notifications}}/notificaciones/correo",
         "body": {
           "mode": "raw",
           "raw": "{\"to\": \"cliente@duoc.cl\", \"subject\": \"Prueba PerfumesDuoc\", \"text\": \"Notificación de prueba enviada desde Postman.\"}"
         }
+      }
+    },
+    {
+      "name": "8. Preflight CORS al gateway",
+      "request": {
+        "method": "OPTIONS",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "http://localhost:5173"
+          },
+          {
+            "key": "Access-Control-Request-Method",
+            "value": "POST"
+          }
+        ],
+        "url": "{{gateway}}/api/ordenes"
+      }
+    },
+    {
+      "name": "9. Mi perfil (GET)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": "{{gateway}}/api/perfil"
+      }
+    },
+    {
+      "name": "10. Mi perfil (PUT)",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{gateway}}/api/perfil",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"nombre\": \"Cliente Demo\", \"telefono\": \"+56912345678\", \"comuna\": \"Maipú\", \"ciudad\": \"Santiago\", \"categoria_preferida\": \"mujer\"}"
+        }
+      }
+    },
+    {
+      "name": "11. Recomendaciones populares (público)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{gateway}}/api/recomendaciones/populares"
+      }
+    },
+    {
+      "name": "12. Recomendaciones para mí",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": "{{gateway}}/api/recomendaciones"
+      }
+    },
+    {
+      "name": "13. Iniciar pago Webpay (repetir rápido 4-5 veces -> 429 por fraude)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{gateway}}/api/pagos/iniciar",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"ordenId\": 1}"
+        }
+      }
+    },
+    {
+      "name": "14. Estado antifraude del cliente",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": "{{gateway}}/api/pagos/estado"
+      }
+    },
+    {
+      "name": "15. Historial de mis pagos",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": "{{gateway}}/api/pagos"
       }
     }
   ]

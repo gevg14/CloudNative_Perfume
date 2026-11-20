@@ -1,11 +1,11 @@
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
 const { enviarCorreo } = require('./mailer');
 const { consumeOrdenConfirmada } = require('./rabbitmq');
+const { consumirAlertasFraude } = require('./kafka');
 
 const app = express();
-app.use(cors());
+// Sin CORS aquí: el navegador solo habla con el API Gateway.
 app.use(express.json());
 
 app.get('/health', (req, res) => res.json({ status: 'ok', service: 'notifications-service' }));
@@ -29,5 +29,12 @@ consumeOrdenConfirmada(async (evento) => {
     text: `¡Gracias por tu compra! Total: $${evento.total}. Te avisaremos cuando sea despachada.`,
   });
 })
+  .then(() => consumirAlertasFraude(async (alerta) => {
+    await enviarCorreo({
+      to: process.env.ALERTAS_EMAIL || 'seguridad@perfumesduoc.cl',
+      subject: `PerfumesDuoc - ALERTA DE FRAUDE: cliente ${alerta.idCliente} bloqueado`,
+      text: `Motivo: ${alerta.motivo}. Bloqueado hasta: ${alerta.bloqueadoHasta}.`,
+    });
+  }))
   .then(() => app.listen(PORT, () => console.log(`[notifications-service] escuchando en :${PORT}`)))
   .catch((err) => { console.error('[notifications-service] Error al iniciar:', err); process.exit(1); });
